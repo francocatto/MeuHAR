@@ -131,38 +131,37 @@
     </div>
 
     <script>
-        let model;
-        let sensor;
-        let sensorBuffer = [];
-        const SAMPLES_LIMIT = 200; // Janela de 200 amostras
-        const FREQUENCY = 20;      // 20Hz
+    let model;
+    let sensor;
+    let sensorBuffer = [];
+    const SAMPLES_LIMIT = 200; 
+    const FREQUENCY = 20;      
 
-        // Labels (Ajuste conforme as classes do seu modelo específico)
-        const LABELS = ['Caminhando', 'Subindo Escadas', 'Descendo Escadas', 'Sentado', 'Em Pé', 'Correndo'];
+    // --- 1. VALORES DO SEU Z-SCALE (Substitua pelos valores exatos do seu print do Colab) ---
+    const MEAN = { x: 1.00113179, y: 7.48309389, z: 0.41685324 };
+    const STD = { x: 6.64743594, y: 6.79474915, z: 4.93330347 };
 
-        const btnStart = document.getElementById('btnStart');
-        const activityEl = document.getElementById('activity-result');
-        const confidenceEl = document.getElementById('confidence-result');
-        const logEl = document.getElementById('log');
+    const LABELS = ['Caminhando', 'Subindo Escadas', 'Descendo Escadas', 'Sentado', 'Em Pé', 'Correndo'];
 
-        // 1. Carregar Modelo TFJS
-        async function loadModel() {
-            try {
-                logEl.innerText = "Carregando modelo...";
-                model = await tf.loadLayersModel('./tfjs_model/model.json');
-                logEl.innerText = "Modelo carregado com sucesso!";
-            } catch (err) {
-                logEl.innerText = "Erro ao carregar modelo: " + err.message;
-                console.error(err);
-            }
+    const btnStart = document.getElementById('btnStart');
+    const activityEl = document.getElementById('activity-result');
+    const confidenceEl = document.getElementById('confidence-result');
+    const logEl = document.getElementById('log');
+
+    async function loadModel() {
+        try {
+            logEl.innerText = "Carregando modelo...";
+            model = await tf.loadLayersModel('./tfjs_model/model.json');
+            logEl.innerText = "Modelo pronto para inferência!";
+        } catch (err) {
+            logEl.innerText = "Erro ao carregar modelo: " + err.message;
         }
+    }
 
-        // 2. Lógica de Inferência
-        async function runInference() {
-            if (!model) return;
+    async function runInference() {
+        if (!model) return;
 
-            // Formata o buffer para [1, 200, 3]
-            // O buffer está como [x,y,z, x,y,z...] então reshape direto
+        try {
             const inputTensor = tf.tidy(() => {
                 return tf.tensor3d(sensorBuffer, [1, SAMPLES_LIMIT, 3]);
             });
@@ -173,72 +172,77 @@
             const maxScoreIndex = scores.indexOf(Math.max(...scores));
             const confidence = (scores[maxScoreIndex] * 100).toFixed(1);
 
-            // Atualiza UI
             activityEl.innerText = LABELS[maxScoreIndex] || `Classe ${maxScoreIndex}`;
             confidenceEl.innerText = `Confiança: ${confidence}%`;
 
-            // Cleanup
             inputTensor.dispose();
             prediction.dispose();
+        } catch (err) {
+            logEl.innerText = "Erro na inferência: " + err.message;
+        }
+    }
+
+    async function startSensors() {
+        // Mudamos para Accelerometer para bater com os dados do WISDM
+        if (!('Accelerometer' in window)) {
+            alert("Acelerômetro não suportado. Tente usar o Chrome no Android.");
+            return;
         }
 
-        // 3. Sensor API e Coleta
-        async function startSensors() {
-            if (!('LinearAccelerationSensor' in window)) {
-                alert("LinearAccelerationSensor não suportado neste navegador.");
+        try {
+            const permission = await navigator.permissions.query({ name: 'accelerometer' });
+            if (permission.state === 'denied') {
+                alert("Acesso negado.");
                 return;
             }
 
-            try {
-                // Solicitar permissão (necessário em alguns browsers mobile)
-                const permission = await navigator.permissions.query({ name: 'accelerometer' });
-                if (permission.state === 'denied') {
-                    alert("Acesso ao acelerômetro negado.");
-                    return;
+            sensor = new Accelerometer({ frequency: FREQUENCY });
+
+            sensor.addEventListener('reading', () => {
+                // --- 2. APLICAÇÃO DO Z-SCALE EM TEMPO REAL ---
+                let normX = (sensor.x - MEAN.x) / STD.x;
+                let normY = (sensor.y - MEAN.y) / STD.y;
+                let normZ = (sensor.z - MEAN.z) / STD.z;
+
+                sensorBuffer.push(normX, normY, normZ);
+
+                // Feedback visual de coleta
+                if (sensorBuffer.length % 30 === 0) {
+                    logEl.innerText = `Processando: ${Math.floor(sensorBuffer.length / 3)} / 200 amostras`;
                 }
 
-                sensor = new LinearAccelerationSensor({ frequency: FREQUENCY });
+                if (sensorBuffer.length >= SAMPLES_LIMIT * 3) {
+                    runInference();
+                    sensorBuffer = []; 
+                }
+            });
 
-                sensor.addEventListener('reading', () => {
-                    // Adiciona X, Y, Z ao buffer
-                    sensorBuffer.push(sensor.x, sensor.y, sensor.z);
+            sensor.addEventListener('error', event => {
+                logEl.innerText = "Erro: " + event.error.name;
+            });
 
-                    // Quando atingir 200 amostras (200 * 3 valores)
-                    if (sensorBuffer.length >= SAMPLES_LIMIT * 3) {
-                        runInference();
-                        sensorBuffer = []; // Limpa buffer para próxima janela
-                    }
-                });
+            sensor.start();
+            btnStart.disabled = true;
+            btnStart.innerText = "Monitorando...";
 
-                sensor.addEventListener('error', event => {
-                    logEl.innerText = "Erro no sensor: " + event.error.name;
-                });
-
-                sensor.start();
-                btnStart.disabled = true;
-                btnStart.innerText = "Monitorando...";
-                logEl.innerText = "Sensores ativos a 20Hz";
-
-            } catch (error) {
-                logEl.innerText = "Erro: " + error.message;
-            }
+        } catch (error) {
+            logEl.innerText = "Erro: " + error.message;
         }
+    }
 
-        btnStart.addEventListener('click', () => {
-            if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
-                // Necessário para iOS
-                DeviceMotionEvent.requestPermission()
-                    .then(response => {
-                        if (response == 'granted') startSensors();
-                    })
-                    .catch(console.error);
-            } else {
-                startSensors();
-            }
-        });
+    btnStart.addEventListener('click', () => {
+        if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
+            DeviceMotionEvent.requestPermission()
+                .then(response => {
+                    if (response == 'granted') startSensors();
+                })
+                .catch(console.error);
+        } else {
+            startSensors();
+        }
+    });
 
-        // Inicialização
-        loadModel();
-    </script>
+    loadModel();
+</script>
 </body>
 </html>
