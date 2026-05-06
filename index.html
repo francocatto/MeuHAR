@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>HAR - Edge AI Monitor</title>
+    <title>MeuHAR - Edge AI Monitor</title>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
     <style>
         :root {
@@ -16,165 +16,229 @@
         }
 
         body {
-            margin: 0; padding: 0;
-            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            margin: 0;
+            padding: 0;
+            font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
             background-color: var(--bg-color);
             color: var(--text-primary);
-            display: flex; flex-direction: column;
-            align-items: center; justify-content: center;
-            min-height: 100vh; text-align: center;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            text-align: center;
         }
 
         .container {
-            width: 90%; max-width: 450px;
-            padding: 2.5rem;
+            width: 90%;
+            max-width: 500px;
+            padding: 2rem;
             background: var(--card-bg);
             border-radius: 1.5rem;
-            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
-            border: 1px solid rgba(255, 255, 255, 0.05);
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.3);
+            border: 1px solid rgba(255, 255, 255, 0.1);
         }
 
-        h1 { font-size: 1.5rem; margin-bottom: 0.5rem; color: var(--accent-color); }
-        p.subtitle { color: var(--text-secondary); margin-bottom: 2rem; font-size: 0.85rem; }
+        h1 {
+            font-size: 1.8rem;
+            margin-bottom: 0.5rem;
+            color: var(--accent-color);
+            letter-spacing: -0.025em;
+        }
+
+        p.subtitle {
+            color: var(--text-secondary);
+            margin-bottom: 2rem;
+            font-size: 0.9rem;
+        }
 
         #status-card {
-            background: rgba(15, 23, 42, 0.4);
-            padding: 2rem;
+            background: rgba(15, 23, 42, 0.5);
+            padding: 1.5rem;
             border-radius: 1rem;
             margin-bottom: 2rem;
-            border: 1px solid rgba(56, 189, 248, 0.2);
+            border: 1px dashed var(--accent-color);
         }
 
-        .label { font-size: 0.75rem; text-transform: uppercase; color: var(--text-secondary); letter-spacing: 0.1em; }
-        #activity-result { font-size: 2.2rem; font-weight: 800; display: block; margin: 0.5rem 0; color: var(--success); }
-        #confidence-result { font-size: 1rem; color: var(--accent-color); opacity: 0.9; }
+        .activity-label {
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            color: var(--text-secondary);
+            display: block;
+            margin-bottom: 0.5rem;
+        }
+
+        #activity-result {
+            font-size: 2.5rem;
+            font-weight: 800;
+            display: block;
+            margin-bottom: 0.5rem;
+            color: var(--success);
+        }
+
+        #confidence-result {
+            font-size: 1.1rem;
+            font-weight: 500;
+            color: var(--accent-color);
+        }
 
         .btn-start {
-            background: var(--accent-color);
+            background-color: var(--accent-color);
             color: var(--bg-color);
-            border: none; padding: 1.2rem;
-            font-size: 1rem; font-weight: 700;
-            border-radius: 0.75rem; cursor: pointer;
-            width: 100%; transition: all 0.2s;
+            border: none;
+            padding: 1rem 2rem;
+            font-size: 1.1rem;
+            font-weight: 700;
+            border-radius: 0.75rem;
+            cursor: pointer;
+            transition: transform 0.2s, background-color 0.2s;
+            width: 100%;
         }
 
-        .btn-start:hover { transform: translateY(-2px); filter: brightness(1.1); }
-        .btn-start:disabled { background: #475569; cursor: not-allowed; transform: none; }
+        .btn-start:hover {
+            background-color: #7dd3fc;
+            transform: scale(1.02);
+        }
 
-        #log { margin-top: 1.5rem; font-size: 0.7rem; color: var(--text-secondary); font-family: monospace; }
+        .btn-start:disabled {
+            background-color: #475569;
+            cursor: not-allowed;
+        }
+
+        .log {
+            margin-top: 1.5rem;
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            font-family: monospace;
+        }
     </style>
 </head>
 <body>
 
     <div class="container">
-        <h1>Edge AI - Meu Monitor HAR</h1>
-        <p class="subtitle">Classificação de Atividade via Acelerômetro</p>
+        <h1>MeuHAR - Meu Monitor HAR Edge AI</h1>
+        <p class="subtitle">Processamento em Tempo Real (Inference on Edge)</p>
 
         <div id="status-card">
-            <span class="label">Atividade Atual</span>
+            <span class="activity-label">Atividade Detectada</span>
             <span id="activity-result">---</span>
-            <span id="confidence-result">Aguardando início...</span>
+            <span id="confidence-result">Aguardando Sensores...</span>
         </div>
 
         <button id="btnStart" class="btn-start">Iniciar Sensores</button>
 
-        <div id="log">Carregando motor de IA...</div>
+        <div id="log" class="log">Modelo não carregado</div>
     </div>
 
     <script>
         let model;
         let sensor;
         let sensorBuffer = [];
-        const SAMPLES_LIMIT = 200; // 200 amostras (X, Y, Z)
-        
-        // Mapeamento de classes (ajuste conforme seu modelo)
-        const LABELS = ['Caminhando', 'Subindo Escada', 'Descendo Escada', 'Sentado', 'Em Pé', 'Correndo'];
+        const SAMPLES_LIMIT = 200; // Janela de 200 amostras
+        const FREQUENCY = 20;      // 20Hz
+
+        // Labels (Ajuste conforme as classes do seu modelo específico)
+        const LABELS = ['Caminhando', 'Subindo Escadas', 'Descendo Escadas', 'Sentado', 'Em Pé', 'Correndo'];
 
         const btnStart = document.getElementById('btnStart');
         const activityEl = document.getElementById('activity-result');
         const confidenceEl = document.getElementById('confidence-result');
         const logEl = document.getElementById('log');
 
-        async function init() {
+        // 1. Carregar Modelo TFJS
+        async function loadModel() {
             try {
-                // Tenta carregar como GraphModel (mais comum para modelos convertidos que dão erro de InputLayer)
-                model = await tf.loadGraphModel('./tfjs_model/model.json');
-                logEl.innerText = "Modelo de Grafo carregado.";
-            } catch (e) {
-                console.log("Tentando carregar como LayersModel...");
-                try {
-                    model = await tf.loadLayersModel('./tfjs_model/model.json');
-                    logEl.innerText = "Modelo de Camadas carregado.";
-                } catch (err) {
-                    logEl.innerText = "Erro crítico: " + err.message;
-                }
+                logEl.innerText = "Carregando modelo...";
+                model = await tf.loadLayersModel('./tfjs_model/model.json');
+                logEl.innerText = "Modelo carregado com sucesso!";
+            } catch (err) {
+                logEl.innerText = "Erro ao carregar modelo: " + err.message;
+                console.error(err);
             }
         }
 
-        async function predict() {
+        // 2. Lógica de Inferência
+        async function runInference() {
             if (!model) return;
 
-            // Transforma o buffer em Tensor [1, 200, 3]
+            // Formata o buffer para [1, 200, 3]
+            // O buffer está como [x,y,z, x,y,z...] então reshape direto
             const inputTensor = tf.tidy(() => {
                 return tf.tensor3d(sensorBuffer, [1, SAMPLES_LIMIT, 3]);
             });
 
-            // Executa a inferência
             const prediction = model.predict(inputTensor);
             const scores = await prediction.data();
             
-            const maxIdx = scores.indexOf(Math.max(...scores));
-            const conf = (scores[maxIdx] * 100).toFixed(1);
+            const maxScoreIndex = scores.indexOf(Math.max(...scores));
+            const confidence = (scores[maxScoreIndex] * 100).toFixed(1);
 
-            // Atualiza Interface
-            activityEl.innerText = LABELS[maxIdx] || "Desconhecido";
-            confidenceEl.innerText = `Confiança: ${conf}%`;
+            // Atualiza UI
+            activityEl.innerText = LABELS[maxScoreIndex] || `Classe ${maxScoreIndex}`;
+            confidenceEl.innerText = `Confiança: ${confidence}%`;
 
-            // Limpeza de memória
+            // Cleanup
             inputTensor.dispose();
             prediction.dispose();
         }
 
+        // 3. Sensor API e Coleta
         async function startSensors() {
             if (!('LinearAccelerationSensor' in window)) {
-                alert("API de Sensores não suportada. Use Chrome no Android ou habilite flags no Desktop.");
+                alert("LinearAccelerationSensor não suportado neste navegador.");
                 return;
             }
 
             try {
-                sensor = new LinearAccelerationSensor({ frequency: 20 });
-                
+                // Solicitar permissão (necessário em alguns browsers mobile)
+                const permission = await navigator.permissions.query({ name: 'accelerometer' });
+                if (permission.state === 'denied') {
+                    alert("Acesso ao acelerômetro negado.");
+                    return;
+                }
+
+                sensor = new LinearAccelerationSensor({ frequency: FREQUENCY });
+
                 sensor.addEventListener('reading', () => {
+                    // Adiciona X, Y, Z ao buffer
                     sensorBuffer.push(sensor.x, sensor.y, sensor.z);
 
-                    // Se o buffer atingir 200 amostras (cada amostra tem 3 eixos)
+                    // Quando atingir 200 amostras (200 * 3 valores)
                     if (sensorBuffer.length >= SAMPLES_LIMIT * 3) {
-                        predict();
-                        sensorBuffer = []; // Reset para a próxima janela
+                        runInference();
+                        sensorBuffer = []; // Limpa buffer para próxima janela
                     }
+                });
+
+                sensor.addEventListener('error', event => {
+                    logEl.innerText = "Erro no sensor: " + event.error.name;
                 });
 
                 sensor.start();
                 btnStart.disabled = true;
                 btnStart.innerText = "Monitorando...";
-                logEl.innerText = "Processando dados a 20Hz";
-            } catch (err) {
-                logEl.innerText = "Erro nos sensores: " + err.message;
+                logEl.innerText = "Sensores ativos a 20Hz";
+
+            } catch (error) {
+                logEl.innerText = "Erro: " + error.message;
             }
         }
 
         btnStart.addEventListener('click', () => {
-            // Solicitação de permissão necessária para iOS e navegadores modernos
             if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
-                DeviceMotionEvent.requestPermission().then(response => {
-                    if (response == 'granted') startSensors();
-                });
+                // Necessário para iOS
+                DeviceMotionEvent.requestPermission()
+                    .then(response => {
+                        if (response == 'granted') startSensors();
+                    })
+                    .catch(console.error);
             } else {
                 startSensors();
             }
         });
 
-        init();
+        // Inicialização
+        loadModel();
     </script>
 </body>
 </html>
