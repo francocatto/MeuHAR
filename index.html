@@ -74,6 +74,7 @@
             display: block;
             margin-bottom: 0.5rem;
             color: var(--success);
+            transition: color 0.3s;
         }
 
         #confidence-result {
@@ -117,7 +118,7 @@
 
     <div class="container">
         <h1>MeuHAR - Meu Monitor HAR Edge AI</h1>
-        <p class="subtitle">Processamento em Tempo Real (Inference on Edge)</p>
+        <p class="subtitle">Processamento em Tempo Real (Sliding Window)</p>
 
         <div id="status-card">
             <span class="activity-label">Atividade Detectada</span>
@@ -134,19 +135,33 @@
     let model;
     let sensor;
     let sensorBuffer = [];
+    
+    // Controles da Janela Deslizante
     const SAMPLES_LIMIT = 200; 
     const FREQUENCY = 20;      
+    let totalSamplesRead = 0;
 
-    // --- 1. VALORES DO SEU Z-SCALE (Substitua pelos valores exatos do seu print do Colab) ---
-    const MEAN = { x: 1.00113179, y: 7.48309389, z: 0.41685324 };
-    const STD = { x: 6.64743594, y: 6.79474915, z: 4.93330347 };
+    // Controles do Filtro de Suavização (Smoothing)
+    let predictionHistory = [];
+    const HISTORY_SIZE = 5; // Guarda as últimas 5 predições para tirar a moda
 
-    const LABELS = ['Caminhando', 'Subindo Escadas', 'Descendo Escadas', 'Sentado', 'Em Pé', 'Correndo'];
+    // --- 1. VALORES DO SEU Z-SCALE ---
+    const MEAN = { x: 0.66411304, y: 7.24604497, z: 0.39769742 };
+    const STD = { x: 6.87627423, y: 6.73978606, z: 4.76110903 };
+
+    const LABELS = ['Descendo Escadas', 'Correndo', 'Sentado', 'Em Pé', 'Subindo Escadas', 'Caminhando'];
 
     const btnStart = document.getElementById('btnStart');
     const activityEl = document.getElementById('activity-result');
     const confidenceEl = document.getElementById('confidence-result');
     const logEl = document.getElementById('log');
+
+    // Função auxiliar para achar a atividade mais frequente no histórico (Moda)
+    function getMode(arr) {
+        return arr.sort((a,b) =>
+            arr.filter(v => v===a).length - arr.filter(v => v===b).length
+        ).pop();
+    }
 
     async function loadModel() {
         try {
@@ -159,11 +174,13 @@
     }
 
     async function runInference() {
-        if (!model) return;
+        if (!model || sensorBuffer.length < SAMPLES_LIMIT) return;
 
         try {
             const inputTensor = tf.tidy(() => {
-                return tf.tensor3d(sensorBuffer, [1, SAMPLES_LIMIT, 3]);
+                // Como o sensorBuffer agora é um array de arrays [[x,y,z], ...], 
+                // colocamos ele dentro de outro array para simular o batch_size = 1
+                return tf.tensor3d([sensorBuffer], [1, SAMPLES_LIMIT, 3]);
             });
 
             const prediction = model.predict(inputTensor);
@@ -172,8 +189,27 @@
             const maxScoreIndex = scores.indexOf(Math.max(...scores));
             const confidence = (scores[maxScoreIndex] * 100).toFixed(1);
 
-            activityEl.innerText = LABELS[maxScoreIndex] || `Classe ${maxScoreIndex}`;
-            confidenceEl.innerText = `Confiança: ${confidence}%`;
+            // Adiciona a predição atual ao histórico
+            predictionHistory.push(maxScoreIndex);
+            if (predictionHistory.length > HISTORY_SIZE) {
+                predictionHistory.shift(); // Remove a mais antiga
+            }
+
+            // Pega a atividade que mais apareceu recentemente
+            const smoothedModeIndex = getMode([...predictionHistory]);
+
+            activityEl.innerText = LABELS[smoothedModeIndex];
+            
+            // Se a confiança original for baixa, avisa na cor da confiança
+            if (parseFloat(confidence) < 50.0) {
+                confidenceEl.innerText = `Confiança Baixa: ${confidence}%`;
+                confidenceEl.style.color = '#fbbf24'; // Amarelo alerta
+            } else {
+                confidenceEl.innerText = `Confiança: ${confidence}%`;
+                confidenceEl.style.color = 'var(--accent-color)';
+            }
+
+            logEl.innerText = "Monitorando em tempo real...";
 
             inputTensor.dispose();
             prediction.dispose();
@@ -183,7 +219,6 @@
     }
 
     async function startSensors() {
-        // Mudamos para Accelerometer para bater com os dados do WISDM
         if (!('Accelerometer' in window)) {
             alert("Acelerômetro não suportado. Tente usar o Chrome no Android.");
             return;
@@ -192,41 +227,49 @@
         try {
             const permission = await navigator.permissions.query({ name: 'accelerometer' });
             if (permission.state === 'denied') {
-                alert("Acesso negado.");
+                alert("Acesso negado ao acelerômetro.");
                 return;
             }
 
             sensor = new Accelerometer({ frequency: FREQUENCY });
 
             sensor.addEventListener('reading', () => {
-                // --- 2. APLICAÇÃO DO Z-SCALE EM TEMPO REAL ---
+                // --- APLICAÇÃO DO Z-SCALE EM TEMPO REAL ---
                 let normX = (sensor.x - MEAN.x) / STD.x;
                 let normY = (sensor.y - MEAN.y) / STD.y;
                 let normZ = (sensor.z - MEAN.z) / STD.z;
 
-                sensorBuffer.push(normX, normY, normZ);
+                // Salva como um sub-array [eixoX, eixoY, eixoZ]
+                sensorBuffer.push([normX, normY, normZ]);
+                totalSamplesRead++;
 
-                // Feedback visual de coleta
-                if (sensorBuffer.length % 30 === 0) {
-                    logEl.innerText = `Processando: ${Math.floor(sensorBuffer.length / 3)} / 200 amostras`;
+                // JANELA DESLIZANTE: Limita o buffer a exatamente 200 amostras
+                if (sensorBuffer.length > SAMPLES_LIMIT) {
+                    sensorBuffer.shift(); // Descarta a leitura mais velha
                 }
 
-                if (sensorBuffer.length >= SAMPLES_LIMIT * 3) {
+                // Lógica de Gatilho da Inferência
+                if (sensorBuffer.length < SAMPLES_LIMIT) {
+                    // Feedback visual inicial até encher o buffer de 10 segundos
+                    if (totalSamplesRead % 10 === 0) {
+                        logEl.innerText = `Calibrando sensores: ${sensorBuffer.length} / 200`;
+                    }
+                } else if (totalSamplesRead % 20 === 0) {
+                    // A partir daqui o buffer está cheio. Faz inferência a cada 1 segundo (20 amostras)
                     runInference();
-                    sensorBuffer = []; 
                 }
             });
 
             sensor.addEventListener('error', event => {
-                logEl.innerText = "Erro: " + event.error.name;
+                logEl.innerText = "Erro no sensor: " + event.error.name;
             });
 
             sensor.start();
             btnStart.disabled = true;
-            btnStart.innerText = "Monitorando...";
+            btnStart.innerText = "Capturando Movimento...";
 
         } catch (error) {
-            logEl.innerText = "Erro: " + error.message;
+            logEl.innerText = "Erro ao iniciar: " + error.message;
         }
     }
 
@@ -243,6 +286,6 @@
     });
 
     loadModel();
-</script>
+    </script>
 </body>
 </html>
