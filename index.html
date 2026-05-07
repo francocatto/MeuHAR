@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt-br">
+<html lang="pt">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -13,6 +13,7 @@
             --text-primary: #f8fafc;
             --text-secondary: #94a3b8;
             --success: #22c55e;
+            --warning: #fbbf24;
         }
 
         body {
@@ -117,13 +118,13 @@
 <body>
 
     <div class="container">
-        <h1>MeuHAR - Meu Monitor HAR Edge AI</h1>
+        <h1>MeuHAR - Monitor HAR Edge AI</h1>
         <p class="subtitle">Processamento em Tempo Real (Sliding Window)</p>
 
         <div id="status-card">
-            <span class="activity-label">Atividade Detectada</span>
+            <span class="activity-label">Atividade Detetada</span>
             <span id="activity-result">---</span>
-            <span id="confidence-result">Aguardando Sensores...</span>
+            <span id="confidence-result">A aguardar sensores...</span>
         </div>
 
         <button id="btnStart" class="btn-start">Iniciar Sensores</button>
@@ -132,41 +133,64 @@
     </div>
 
     <script>
-    // Bloco 1: As Configurações e "A Receita" (Constantes)
+    // --- VARIÁVEIS GLOBAIS ---
     let model;
     let sensor;
     let sensorBuffer = [];
+    let wakeLock = null;
     
-    const SAMPLES_LIMIT = 200;  // Tamanho da Janela (10 segundos a 20Hz)
-    const FREQUENCY = 20; // O sensor vai ler a 20Hz, ou seja, 20 amostras por segundo. Para 10 segundos, precisamos de 200 amostras.
-    let totalSamplesRead = 0; 
+    // Controles da Janela Deslizante
+    const SAMPLES_LIMIT = 200; // Tamanho exato que a rede espera (10 segundos)
+    const FREQUENCY = 20;      // 20Hz (20 leituras por segundo)
+    let totalSamplesRead = 0;
 
-    // Controles do Filtro de Suavização (Smoothing)
+    // Controles do Filtro de Suavização (Smoothing) para evitar o "efeito janela mista"
     let predictionHistory = [];
-    const HISTORY_SIZE = 5; // Guarda as últimas 5 predições para tirar a moda
+    const HISTORY_SIZE = 5; // Guarda as últimas 5 predições
 
-    // --- 1. VALORES DO SEU Z-SCALE ---
+    // --- PARÂMETROS DO Z-SCALE (Do treino no Python) ---
     const MEAN = { x: 0.66411304, y: 7.24604497, z: 0.39769742 };
     const STD = { x: 6.87627423, y: 6.73978606, z: 4.76110903 };
 
+    // --- ETIQUETAS DAS ATIVIDADES ---
     const LABELS = ['Descendo Escadas', 'Correndo', 'Sentado', 'Em Pé', 'Subindo Escadas', 'Caminhando'];
 
+    // --- ELEMENTOS DA INTERFACE ---
     const btnStart = document.getElementById('btnStart');
     const activityEl = document.getElementById('activity-result');
     const confidenceEl = document.getElementById('confidence-result');
     const logEl = document.getElementById('log');
 
-    // Função auxiliar para achar a atividade mais frequente no histórico (Moda)
+    // Função auxiliar para encontrar a moda (atividade mais frequente no histórico)
     function getMode(arr) {
         return arr.sort((a,b) =>
             arr.filter(v => v===a).length - arr.filter(v => v===b).length
         ).pop();
     }
 
-    // Bloco 2: Carregando o "Cérebro"
+    // Função para manter o ecrã ligado durante a demonstração
+    async function requestWakeLock() {
+        try {
+            if ('wakeLock' in navigator) {
+                wakeLock = await navigator.wakeLock.request('screen');
+                console.log('Wake Lock ativado! O ecrã não se apagará sozinho.');
+                
+                // Reaplica o Wake Lock caso o utilizador minimize a aba e volte
+                document.addEventListener('visibilitychange', async () => {
+                    if (wakeLock !== null && document.visibilityState === 'visible') {
+                        wakeLock = await navigator.wakeLock.request('screen');
+                    }
+                });
+            }
+        } catch (err) {
+            console.error(`Erro no Wake Lock: ${err.name}, ${err.message}`);
+        }
+    }
+
+    // Carrega a arquitetura e os pesos do modelo exportado
     async function loadModel() {
         try {
-            logEl.innerText = "Carregando modelo...";
+            logEl.innerText = "A carregar modelo...";
             model = await tf.loadLayersModel('./tfjs_model/model.json');
             logEl.innerText = "Modelo pronto para inferência!";
         } catch (err) {
@@ -174,45 +198,47 @@
         }
     }
 
-    // Bloco 4: A Inteligência Artificial (Inferência)
+    // Executa a rede neuronal
     async function runInference() {
         if (!model || sensorBuffer.length < SAMPLES_LIMIT) return;
 
         try {
             const inputTensor = tf.tidy(() => {
-                // Como o sensorBuffer agora é um array de arrays [[x,y,z], ...], 
-                // colocamos ele dentro de outro array para simular o batch_size = 1
+                // Transforma o array de arrays [[x,y,z], ...] num Tensor 3D [batch=1, tempo=200, features=3]
                 return tf.tensor3d([sensorBuffer], [1, SAMPLES_LIMIT, 3]);
             });
 
+            // Faz a predição
             const prediction = model.predict(inputTensor);
             const scores = await prediction.data();
             
+            // Calcula a confiança via Softmax (maior probabilidade)
             const maxScoreIndex = scores.indexOf(Math.max(...scores));
             const confidence = (scores[maxScoreIndex] * 100).toFixed(1);
 
-            // Bloco 5: O Filtro de Suavização (UX/UI)
+            // Adiciona a predição ao histórico de suavização
             predictionHistory.push(maxScoreIndex);
             if (predictionHistory.length > HISTORY_SIZE) {
-                predictionHistory.shift(); // Remove a mais antiga
+                predictionHistory.shift(); 
             }
 
-            // Pega a atividade que mais apareceu recentemente
+            // Seleciona a moda para apresentar no ecrã
             const smoothedModeIndex = getMode([...predictionHistory]);
 
             activityEl.innerText = LABELS[smoothedModeIndex];
             
-            // Se a confiança original for baixa, avisa na cor da confiança
+            // Avisa o utilizador se a confiança estiver baixa (fase de transição)
             if (parseFloat(confidence) < 50.0) {
                 confidenceEl.innerText = `Confiança Baixa: ${confidence}%`;
-                confidenceEl.style.color = '#fbbf24'; // Amarelo alerta
+                confidenceEl.style.color = 'var(--warning)'; 
             } else {
                 confidenceEl.innerText = `Confiança: ${confidence}%`;
                 confidenceEl.style.color = 'var(--accent-color)';
             }
 
-            logEl.innerText = "Monitorando em tempo real...";
+            logEl.innerText = "A monitorizar em tempo real...";
 
+            // Limpa a memória para evitar sobrecarga no telemóvel
             inputTensor.dispose();
             prediction.dispose();
         } catch (err) {
@@ -220,46 +246,48 @@
         }
     }
 
-    // Bloco 3: A Captura de Dados (O Coração do App)
-
+    // Inicia a recolha de dados do Acelerómetro
     async function startSensors() {
         if (!('Accelerometer' in window)) {
-            alert("Acelerômetro não suportado. Tente usar o Chrome no Android.");
+            alert("Acelerómetro não suportado no teu navegador/telemóvel.");
             return;
         }
 
         try {
             const permission = await navigator.permissions.query({ name: 'accelerometer' });
             if (permission.state === 'denied') {
-                alert("Acesso negado ao acelerômetro.");
+                alert("Acesso negado ao acelerómetro.");
                 return;
             }
+
+            // Pede para o ecrã ficar ligado
+            await requestWakeLock();
 
             sensor = new Accelerometer({ frequency: FREQUENCY });
 
             sensor.addEventListener('reading', () => {
-                // --- APLICAÇÃO DO Z-SCALE EM TEMPO REAL ---
+                // Normalização Dinâmica Z-Score (tal como no treino)
                 let normX = (sensor.x - MEAN.x) / STD.x;
                 let normY = (sensor.y - MEAN.y) / STD.y;
                 let normZ = (sensor.z - MEAN.z) / STD.z;
 
-                // Salva como um sub-array [eixoX, eixoY, eixoZ]
+                // Garante a estrutura correta dos eixos num sub-array
                 sensorBuffer.push([normX, normY, normZ]);
                 totalSamplesRead++;
 
-                // JANELA DESLIZANTE: Limita o buffer a exatamente 200 amostras
+                // JANELA DESLIZANTE (Mantém as últimas 200 amostras)
                 if (sensorBuffer.length > SAMPLES_LIMIT) {
-                    sensorBuffer.shift(); // Descarta a leitura mais velha
+                    sensorBuffer.shift(); 
                 }
 
-                // Lógica de Gatilho da Inferência
+                // Dispara a rede neuronal na cadência certa
                 if (sensorBuffer.length < SAMPLES_LIMIT) {
-                    // Feedback visual inicial até encher o buffer de 10 segundos
+                    // Interface durante os primeiros 10 segundos (Enchimento do buffer)
                     if (totalSamplesRead % 10 === 0) {
-                        logEl.innerText = `Calibrando sensores: ${sensorBuffer.length} / 200`;
+                        logEl.innerText = `A calibrar sensores: ${sensorBuffer.length} / 200`;
                     }
                 } else if (totalSamplesRead % 20 === 0) {
-                    // A partir daqui o buffer está cheio. Faz inferência a cada 1 segundo (20 amostras)
+                    // Após calibrar, faz 1 predição por segundo (a cada 20 novas amostras)
                     runInference();
                 }
             });
@@ -270,13 +298,14 @@
 
             sensor.start();
             btnStart.disabled = true;
-            btnStart.innerText = "Capturando Movimento...";
+            btnStart.innerText = "A capturar movimento...";
 
         } catch (error) {
             logEl.innerText = "Erro ao iniciar: " + error.message;
         }
     }
 
+    // Botão de Start (Essencial para garantir permissões de áudio/sensores no iOS e em alguns Androids)
     btnStart.addEventListener('click', () => {
         if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
             DeviceMotionEvent.requestPermission()
@@ -289,6 +318,7 @@
         }
     });
 
+    // Inicia o carregamento do modelo assim que a página abre
     loadModel();
     </script>
 </body>
