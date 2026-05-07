@@ -132,14 +132,14 @@
     </div>
 
     <script>
+    // Bloco 1: As Configurações e "A Receita" (Constantes)
     let model;
     let sensor;
     let sensorBuffer = [];
     
-    // Controles da Janela Deslizante
-    const SAMPLES_LIMIT = 200; 
-    const FREQUENCY = 20;      
-    let totalSamplesRead = 0;
+    const SAMPLES_LIMIT = 200;  // Tamanho da Janela (10 segundos a 20Hz)
+    const FREQUENCY = 20; // O sensor vai ler a 20Hz, ou seja, 20 amostras por segundo. Para 10 segundos, precisamos de 200 amostras.
+    let totalSamplesRead = 0; 
 
     // Controles do Filtro de Suavização (Smoothing)
     let predictionHistory = [];
@@ -163,6 +163,7 @@
         ).pop();
     }
 
+    // Bloco 2: Carregando o "Cérebro"
     async function loadModel() {
         try {
             logEl.innerText = "Carregando modelo...";
@@ -173,6 +174,7 @@
         }
     }
 
+    // Bloco 4: A Inteligência Artificial (Inferência)
     async function runInference() {
         if (!model || sensorBuffer.length < SAMPLES_LIMIT) return;
 
@@ -189,7 +191,7 @@
             const maxScoreIndex = scores.indexOf(Math.max(...scores));
             const confidence = (scores[maxScoreIndex] * 100).toFixed(1);
 
-            // Adiciona a predição atual ao histórico
+            // Bloco 5: O Filtro de Suavização (UX/UI)
             predictionHistory.push(maxScoreIndex);
             if (predictionHistory.length > HISTORY_SIZE) {
                 predictionHistory.shift(); // Remove a mais antiga
@@ -217,6 +219,8 @@
             logEl.innerText = "Erro na inferência: " + err.message;
         }
     }
+
+    // Bloco 3: A Captura de Dados (O Coração do App)
 
     async function startSensors() {
         if (!('Accelerometer' in window)) {
