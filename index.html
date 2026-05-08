@@ -173,17 +173,19 @@
         try {
             if ('wakeLock' in navigator) {
                 wakeLock = await navigator.wakeLock.request('screen');
-                console.log('Wake Lock ativado! O ecrã não se apagará sozinho.');
+                logEl.innerText += "\n✅ Wake Lock ativado!";
                 
-                // Reaplica o Wake Lock caso o utilizador minimize a aba e volte
                 document.addEventListener('visibilitychange', async () => {
                     if (wakeLock !== null && document.visibilityState === 'visible') {
                         wakeLock = await navigator.wakeLock.request('screen');
                     }
                 });
+            } else {
+                logEl.innerText += "\n Wake Lock não suportado pelo navegador.";
             }
         } catch (err) {
-            console.error(`Erro no Wake Lock: ${err.name}, ${err.message}`);
+            // O pulo do gato: mostrar o erro real na tela do celular!
+            logEl.innerText += `\n Erro Wake Lock: ${err.name} - ${err.message}`;
         }
     }
 
